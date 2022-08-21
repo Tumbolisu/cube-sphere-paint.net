@@ -4,9 +4,9 @@ A few Paint.NET plugins for converting between images of unwrapped cubes and pro
 <br/>
 
 Includes the following plugins:
-### Cube -> Sphere (Equirectangular)
+### ![CubeToSphereEquirectangular](/CubeToSphereEquirectangular.png "Icon for Cube To Sphere (Equirectangular)") Cube -> Sphere (Equirectangular)
 Turns a cubemap into an equirectangular spheremap, eliminating edge-distortions, but introducing pole-distortions.
-### Sphere (Equirectangular) -> Cube
+### ![SphereEquirectangularToCube](/SphereEquirectangularToCube.png "Icon for Sphere (Equirectangular) To Cube") Sphere (Equirectangular) -> Cube
 Turns an equirectangular spheremap into a cubemap, eliminating pole-distortions, but introducing edge-distortions.
 
 
