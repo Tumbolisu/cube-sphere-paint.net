@@ -22,7 +22,23 @@ You can savely remove the ZIP, DLL and BAT files afterwards.
 
 All plugins are found in the Effects tab, in the submenu "Projection".
 
-For more information on the usage of a certain plugin, use the plugin and click the ? button in the top-right of the window title bar.
+For detailed information on the usage of a certain plugin, use the plugin and click the ? button in the top-right of the window title bar.
+
+<br/>
+
+Since this is a plugin for an image editor, some pictures will really help describe the usage.
+
+Example of converting a cubemap to a spheremap:
+
+![CubeLayout](readme-assets/cube_layout.png "The layout of a cube.")
+![CubeLayoutConverted](readme-assets/cube_layout_converted_to_sphere.png "The same layout image, but converted to an equirectangular sphere map.")
+
+Example of converting an equirectangular spheremap to a cubemap:
+
+![EarthSphereEquirectangular](readme-assets/nasa_earth_sphere_equirectangular.png "Equirectangular projection of the earth. Credit: NASA")
+![EarthCube](readme-assets/nasa_earth_cube.png "The same earth image, but converted to a cube map.")
+
+Image Credit: NASA
 
 
 <br/><br/><br/>
