@@ -2,16 +2,17 @@
 // Submenu: Projection
 // Author: Tumby#5171
 // Title: Project Spheremap to Cubemap
-// Version: 1.0
+// Version: 2.0
 // Desc: Turns an equirectangular spheremap into a cubemap, eliminating pole-distortions, but introducing edge-distortions.
 // Keywords: projection|cube|cubemap|sphere|spheremap|equirectangular|skybox
-// URL:
-// Help: This effect takes a spheremap, which is a texture that can be directly applied to a UV-sphere, and splits it into the six images of a corresponding cubemap.        The six images will be placed as follows:        (Ultra short description:) [up,dn,--,--], [rt,ft,lf,bk].        (Long description:) In the top left corner is the "up" image. To the right of it lies the "down" image. The rest of the top row is unused. Below the "up" image is the "right" image. To the right are the "front", "left" and "back" images, in order. The "up" and "right" images should line up nicely. The "right", "front", "left" and "back" images should also line up perfectly.        Note 1: In order for each image to be a square, the input image must be twice as wide as it is tall. Using other ratios might cause problems, for which I have no responsibility.        Note 2: If you were to place the "down" image below the "right" image, it would line up and create the net of the cube. However, such a layout takes up too much space.        Note 3: The names of the 6 images are based off of Source engine skyboxes, for which this effect was made.
+// URL: [See RTF File]
+// Help: [See RTF File]
 #region UICode
 IntSliderControl user_yaw_offset = 0; // [-180,180] Rotate Yaw (Left/Right)
 IntSliderControl user_samples = 5; // [1,32] Super-Sampling Size (1 = Disable)
-ListBoxControl user_interpolation_choice = 1; // Interpolation Type|Nearest Neighbour (Crisp, Aliased)|Bilinear (Blurry, Antialiased)
 ListBoxControl user_window_choice = 1; // Super-Sampling Window Type|Box (Simple, Blurry)|Sinc (Sharper)
+ListBoxControl user_interpolation_choice = 1; // Interpolation Type|Nearest Neighbour (Crisp, Aliased)|Bilinear (Blurry, Antialiased)
+CheckboxControl user_hdr = false; // Compressed HDR
 #endregion
 
 /*******************************************************************************
@@ -30,8 +31,8 @@ ListBoxControl user_window_choice = 1; // Super-Sampling Window Type|Box (Simple
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
-	
-	You can contact me via tumbolisu@gmx.de.
+
+    You can contact me via tumbolisu@gmx.de.
 *******************************************************************************/
 
 // Utility function.
@@ -53,6 +54,128 @@ double FModPositive(double dividend, double divisor)
     double result = dividend - Math.Truncate(dividend / divisor) * divisor;
     if (result < 0.0) result += divisor;
     return result;
+}
+
+// Blending compressed HDR colors is quite different. This function takes care of that.
+ColorBgra ColorBlendHDR(ColorBgra pix0, ColorBgra pix1, double frac)
+{
+    if (frac <= 0) { return pix0; }
+    if (frac >= 1) { return pix1; }
+
+    double B = (pix0.B * pix0.A) * (1 - frac) + (pix1.B * pix1.A) * frac;
+    double G = (pix0.G * pix0.A) * (1 - frac) + (pix1.G * pix1.A) * frac;
+    double R = (pix0.R * pix0.A) * (1 - frac) + (pix1.R * pix1.A) * frac;
+
+    double M = (B > G ? (B > R ? B : R) : (G > R ? G : R));
+
+    pix0.A = (byte)Math.Ceiling(M / 255);
+
+    pix0.R = (byte)(R / pix0.A);
+    pix0.G = (byte)(G / pix0.A);
+    pix0.B = (byte)(B / pix0.A);
+
+    return pix0;
+}
+
+ColorBgra BilinearSampleClamped(Surface surf, double x, double y)
+{
+    if (user_hdr)
+    {
+        x = Math.Clamp(x, 0, surf.Width-1);
+        y = Math.Clamp(y, 0, surf.Height-1);
+
+        int florx = (int)Math.Floor(x);
+        int ceilx = (int)Math.Ceiling(x);
+        int flory = (int)Math.Floor(y);
+        int ceily = (int)Math.Ceiling(y);
+
+        ColorBgra pix0 = surf[florx, flory];
+        ColorBgra pix1 = surf[florx, ceily];
+        ColorBgra pix2 = surf[ceilx, flory];
+        ColorBgra pix3 = surf[ceilx, ceily];
+        
+        x = x - florx;
+        y = y - flory;
+
+        pix0 = ColorBlendHDR(pix0, pix1, y);
+        pix2 = ColorBlendHDR(pix2, pix3, y);
+
+        return ColorBlendHDR(pix0, pix2, x);
+    }
+    else
+    {
+        return surf.GetBilinearSampleClamped((float)x, (float)y);
+    }
+}
+
+// For Debugging.
+ColorBgra ColorHDRToLDR(ColorBgra pix, byte scale)
+{
+    int t;
+
+    t = (pix.R * pix.A) / scale;
+    pix.R = (byte)(t > 255 ? 255 : t);
+
+    t = (pix.G * pix.A) / scale;
+    pix.G = (byte)(t > 255 ? 255 : t);
+
+    t = (pix.B * pix.A) / scale;
+    pix.B = (byte)(t > 255 ? 255 : t);
+
+    pix.A = (byte)255;
+
+    return pix;
+}
+
+// Helper Class for super-sampling pixels
+class SuperSample
+{
+    private double B,G,R,A;
+    private bool user_hdr;
+
+    public SuperSample(bool is_hdr)
+    {
+        B = G = R = A = 0;
+        user_hdr = is_hdr;
+    }
+
+    public void AddPixel(ColorBgra pix, double weight)
+    {
+        if (user_hdr)
+        {
+            B += pix.B * pix.A * weight;
+            G += pix.G * pix.A * weight;
+            R += pix.R * pix.A * weight;
+        }
+        else
+        {
+            B += pix.B * weight;
+            G += pix.G * weight;
+            R += pix.R * weight;
+            A += pix.A * weight;
+        }
+    }
+
+    public ColorBgra ToColorBgra()
+    {
+        ColorBgra pix = new ColorBgra();
+        if (user_hdr)
+        {
+            double M = (B > G ? (B > R ? B : R) : (G > R ? G : R));
+            pix.A = (byte)Math.Ceiling(M / 255);
+            pix.R = (byte)(R / pix.A);
+            pix.G = (byte)(G / pix.A);
+            pix.B = (byte)(B / pix.A);
+        }
+        else
+        {
+            pix.B = (byte)Math.Round(B);
+            pix.G = (byte)Math.Round(G);
+            pix.R = (byte)Math.Round(R);
+            pix.A = (byte)Math.Round(A);
+        }
+        return pix;
+    }
 }
 
 
@@ -192,7 +315,7 @@ void Render(Surface dst, Surface src, Rectangle rect)
     double[] vec = new double[3];  // 3D World Vector
     double[] uv = new double[2];  // 2D Image Vector
 
-    double[] pixel_sum;  // Super-sampling sum of pixels. Order: BGRA
+    SuperSample super;  // Super-sampling sum of pixels.
     ColorBgra pix = ColorBgra.Black;  // Work Pixel
 
     double pitch = 0.0;  // angle made from image y position. ranges from -pi/2 to +pi/2.
@@ -207,7 +330,7 @@ void Render(Surface dst, Surface src, Rectangle rect)
 
         for (int xx = rect.Left; xx < rect.Right; xx++)
         {
-            pixel_sum = new double[4];
+            super = new SuperSample(user_hdr);
 
             for (int sample_y = 0; sample_y < user_samples; sample_y++)
             {
@@ -339,32 +462,18 @@ void Render(Surface dst, Surface src, Rectangle rect)
                         break;
 
                     case 1:  // Bilinear
-                        pix = wrk.GetBilinearSampleClamped((float)s, (float)t);
+                        pix = BilinearSampleClamped(wrk, s, t);
                         break;
 
                     default:  // Invalid Interpolation!
                         return;
                     }
 
-                    pixel_sum[0] += pix.B * window[sample_x, sample_y];
-                    pixel_sum[1] += pix.G * window[sample_x, sample_y];
-                    pixel_sum[2] += pix.R * window[sample_x, sample_y];
-                    pixel_sum[3] += pix.A * window[sample_x, sample_y];
-
-                    //pix.R = (byte)(s*16);
-                    //pix.G = (byte)0;
-                    //pix.G = (byte)(t*32);
-                    //pix.B = (s < 0 || s > 255 || t < 0 || t > 255) ? (byte)255 : (byte)0;
+                    super.AddPixel(pix, window[sample_x, sample_y]);
                 }
             }  // end of super-sampling
 
-            
-            pix.B = (byte)Math.Round(pixel_sum[0]);
-            pix.G = (byte)Math.Round(pixel_sum[1]);
-            pix.R = (byte)Math.Round(pixel_sum[2]);
-            pix.A = (byte)Math.Round(pixel_sum[3]);
-            
-
+            pix = super.ToColorBgra();
             dst[xx,yy] = pix;
         }
     }  // end of pixel loops

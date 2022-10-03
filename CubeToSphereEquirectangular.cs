@@ -2,16 +2,17 @@
 // Submenu: Projection
 // Author: Tumby#5171
 // Title: Project Cubemap to Spheremap
-// Version: 1.0
+// Version: 2.0
 // Desc: Turns a cubemap into an equirectangular spheremap, eliminating edge-distortions, but introducing pole-distortions.
 // Keywords: projection|cube|cubemap|sphere|spheremap|equirectangular|skybox
-// URL:
-// Help: This effect uses the six images of a cube to generate a texture that can be directly used on a UV-sphere.        The six images must be placed as follows:        (Ultra short description:) [up,dn,--,--], [rt,ft,lf,bk].        (Long description:) In the top left corner is the "up" image. To the right of it lies the "down" image. The rest of the top row is unused. Below the "up" image is the "right" image. To the right are the "front", "left" and "back" images, in order. The "up" and "right" images should line up nicely. The "right", "front", "left" and "back" images should also line up perfectly.        Note 1: Each image should be a perfect square, which also means that the full layout should be twice as wide as it is tall.        Note 2: If you were to place the "down" image below the "right" image, it would line up and create the net of the cube. However, such a layout takes up too much space.        Note 3: The names of the 6 images are based off of Source engine skyboxes, for which this effect was made.
+// URL: [See RTF File]
+// Help: [See RTF File]
 #region UICode
 IntSliderControl user_yaw_offset = 0; // [-180,180] Rotate Yaw (Left/Right)
 IntSliderControl user_samples = 5; // [1,32] Super-Sampling Size (1 = Disable)
-ListBoxControl user_interpolation_choice = 1; // Interpolation Type|Nearest Neighbour (Crisp, Aliased)|Bilinear (Blurry, Antialiased)
 ListBoxControl user_window_choice = 1; // Super-Sampling Window Type|Box (Simple, Blurry)|Sinc (Sharper)
+ListBoxControl user_interpolation_choice = 1; // Interpolation Type|Nearest Neighbour (Crisp, Aliased)|Bilinear (Blurry, Antialiased)
+CheckboxControl user_hdr = false; // Compressed HDR
 #endregion
 
 /*******************************************************************************
@@ -30,8 +31,8 @@ ListBoxControl user_window_choice = 1; // Super-Sampling Window Type|Box (Simple
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
-	
-	You can contact me via tumbolisu@gmx.de.
+
+    You can contact me via tumbolisu@gmx.de.
 *******************************************************************************/
 
 // Utility function.
@@ -39,6 +40,140 @@ ListBoxControl user_window_choice = 1; // Super-Sampling Window Type|Box (Simple
 double Remap(double value, double in_min, double in_max, double out_min, double out_max)
 {
     return out_min + (((value - in_min) * (out_max - out_min)) / (in_max - in_min));
+}
+
+// Blending compressed HDR colors is quite different. This function takes care of that.
+ColorBgra ColorBlendHDR(ColorBgra pix0, ColorBgra pix1, double frac)
+{
+    if (frac <= 0) { return pix0; }
+    if (frac >= 1) { return pix1; }
+
+    double B = (pix0.B * pix0.A) * (1 - frac) + (pix1.B * pix1.A) * frac;
+    double G = (pix0.G * pix0.A) * (1 - frac) + (pix1.G * pix1.A) * frac;
+    double R = (pix0.R * pix0.A) * (1 - frac) + (pix1.R * pix1.A) * frac;
+
+    double M = (B > G ? (B > R ? B : R) : (G > R ? G : R));
+
+    pix0.A = (byte)Math.Ceiling(M / 255);
+
+    pix0.R = (byte)(R / pix0.A);
+    pix0.G = (byte)(G / pix0.A);
+    pix0.B = (byte)(B / pix0.A);
+
+    return pix0;
+}
+
+ColorBgra ColorBlendAuto(ColorBgra pix0, ColorBgra pix1, double frac)
+{
+    if (user_hdr)
+    {
+        return ColorBlendHDR(pix0, pix1, frac);
+    }
+    else
+    {
+        return ColorBgra.Blend(pix0, pix1, (byte)Math.Round(frac*255));
+    }
+}
+
+ColorBgra BilinearSampleClamped(Surface surf, double x, double y)
+{
+    if (user_hdr)
+    {
+        x = Math.Clamp(x, 0, surf.Width-1);
+        y = Math.Clamp(y, 0, surf.Height-1);
+
+        int florx = (int)Math.Floor(x);
+        int ceilx = (int)Math.Ceiling(x);
+        int flory = (int)Math.Floor(y);
+        int ceily = (int)Math.Ceiling(y);
+
+        ColorBgra pix0 = surf[florx, flory];
+        ColorBgra pix1 = surf[florx, ceily];
+        ColorBgra pix2 = surf[ceilx, flory];
+        ColorBgra pix3 = surf[ceilx, ceily];
+        
+        x = x - florx;
+        y = y - flory;
+
+        pix0 = ColorBlendHDR(pix0, pix1, y);
+        pix2 = ColorBlendHDR(pix2, pix3, y);
+
+        return ColorBlendHDR(pix0, pix2, x);
+    }
+    else
+    {
+        return surf.GetBilinearSampleClamped((float)x, (float)y);
+    }
+}
+
+// For Debugging.
+ColorBgra ColorHDRToLDR(ColorBgra pix, byte scale)
+{
+    int t;
+
+    t = (pix.R * pix.A) / scale;
+    pix.R = (byte)(t > 255 ? 255 : t);
+
+    t = (pix.G * pix.A) / scale;
+    pix.G = (byte)(t > 255 ? 255 : t);
+
+    t = (pix.B * pix.A) / scale;
+    pix.B = (byte)(t > 255 ? 255 : t);
+
+    pix.A = (byte)255;
+
+    return pix;
+}
+
+// Helper Class for super-sampling pixels
+class SuperSample
+{
+    private double B,G,R,A;
+    private bool user_hdr;
+
+    public SuperSample(bool is_hdr)
+    {
+        B = G = R = A = 0;
+        user_hdr = is_hdr;
+    }
+
+    public void AddPixel(ColorBgra pix, double weight)
+    {
+        if (user_hdr)
+        {
+            B += pix.B * pix.A * weight;
+            G += pix.G * pix.A * weight;
+            R += pix.R * pix.A * weight;
+        }
+        else
+        {
+            B += pix.B * weight;
+            G += pix.G * weight;
+            R += pix.R * weight;
+            A += pix.A * weight;
+        }
+    }
+
+    public ColorBgra ToColorBgra()
+    {
+        ColorBgra pix = new ColorBgra();
+        if (user_hdr)
+        {
+            double M = (B > G ? (B > R ? B : R) : (G > R ? G : R));
+            pix.A = (byte)Math.Ceiling(M / 255);
+            pix.R = (byte)(R / pix.A);
+            pix.G = (byte)(G / pix.A);
+            pix.B = (byte)(B / pix.A);
+        }
+        else
+        {
+            pix.B = (byte)Math.Round(B);
+            pix.G = (byte)Math.Round(G);
+            pix.R = (byte)Math.Round(R);
+            pix.A = (byte)Math.Round(A);
+        }
+        return pix;
+    }
 }
 
 // The following variables never change, so they are calculated once in the Pre-Render.
@@ -60,12 +195,13 @@ void PreRender(Surface dst, Surface src)
     // Tiles need to be square, otherwise the following code will be a mess.
     // So, I'm taking the smaller of tile_width and tile_height as the true size.
     int tile_len = (tile_width < tile_height) ? tile_width : tile_height;
-
+    int TL = tile_len;  // Abbreviation. Only use when appropiate!
 
     // Work Surfaces //
 
     Size wrk_size = new Size(tile_len + 2, tile_len + 2);
     int wrk_end = tile_len + 1;
+    int WE = wrk_end;  // Abbreviation. Only use when appropiate!
 
     if (up == null)  up = new Surface(wrk_size);
     if (dn == null)  dn = new Surface(wrk_size);
@@ -79,54 +215,57 @@ void PreRender(Surface dst, Surface src)
     {
         for (int x = 0; x < tile_len; x++)
         {
-            up[x+1, y+1] = src[0 * tile_len + x, 0 * tile_len + y];
-            dn[x+1, y+1] = src[1 * tile_len + x, 0 * tile_len + y];
-            rt[x+1, y+1] = src[0 * tile_len + x, 1 * tile_len + y];
-            ft[x+1, y+1] = src[1 * tile_len + x, 1 * tile_len + y];
-            lf[x+1, y+1] = src[2 * tile_len + x, 1 * tile_len + y];
-            bk[x+1, y+1] = src[3 * tile_len + x, 1 * tile_len + y];
+            up[x+1, y+1] = src[0 * TL + x, 0 * TL + y];
+            dn[x+1, y+1] = src[1 * TL + x, 0 * TL + y];
+            rt[x+1, y+1] = src[0 * TL + x, 1 * TL + y];
+            ft[x+1, y+1] = src[1 * TL + x, 1 * TL + y];
+            lf[x+1, y+1] = src[2 * TL + x, 1 * TL + y];
+            bk[x+1, y+1] = src[3 * TL + x, 1 * TL + y];
         }
     }
 
     // Edges
+    int mi;  // mirrored direction of i
     for (int i = 1; i <= tile_len; i++)
     {
+        mi = tile_len - i;
+
         // Left Edge
-        up[0, i] = bk[       i,        1];  // Left up = Top bk
-        dn[0, i] = bk[       i, tile_len];  // Left dn = Bottom bk
-        rt[0, i] = bk[tile_len,        i];  // Left rt = Right bk
-        ft[0, i] = rt[tile_len,        i];  // Left ft = Right rt
-        lf[0, i] = ft[tile_len,        i];  // Left lf = Right ft
-        bk[0, i] = lf[tile_len,        i];  // Left bk = Right lf
+        up[ 0, i] = bk[ i,  1];  // Left up = Top bk
+        dn[ 0, i] = bk[mi, TL];  // Left dn = Bottom bk
+        rt[ 0, i] = bk[TL,  i];  // Left rt = Right bk
+        ft[ 0, i] = rt[TL,  i];  // Left ft = Right rt
+        lf[ 0, i] = ft[TL,  i];  // Left lf = Right ft
+        bk[ 0, i] = lf[TL,  i];  // Left bk = Right lf
 
         // Right Edge
-        up[wrk_end, i] = ft[i,        1];  // Right up = Top ft
-        dn[wrk_end, i] = ft[i, tile_len];  // Right dn = Bottom ft
-        rt[wrk_end, i] = ft[1,        i];  // Right rt = Left ft
-        ft[wrk_end, i] = lf[1,        i];  // Right ft = Left lf
-        lf[wrk_end, i] = bk[1,        i];  // Right lf = Left bk
-        bk[wrk_end, i] = rt[1,        i];  // Right bk = Left rt
+        up[WE, i] = ft[mi,  1];  // Right up = Top ft
+        dn[WE, i] = ft[ i, TL];  // Right dn = Bottom ft
+        rt[WE, i] = ft[ 1,  i];  // Right rt = Left ft
+        ft[WE, i] = lf[ 1,  i];  // Right ft = Left lf
+        lf[WE, i] = bk[ 1,  i];  // Right lf = Left bk
+        bk[WE, i] = rt[ 1,  i];  // Right bk = Left rt
 
         // Top Edge
-        up[i, 0] = lf[       i,        1];  // Top up = Top lf
-        dn[i, 0] = rt[       i, tile_len];  // Top dn = Bottom rt
-        rt[i, 0] = up[       i, tile_len];  // Top rt = Bottom up
-        ft[i, 0] = up[tile_len,        i];  // Top ft = Right up
-        lf[i, 0] = up[       i,        1];  // Top lf = Top up
-        bk[i, 0] = up[       1,        i];  // Top bk = Left up
+        up[ i, 0] = lf[mi,  1];  // Top up = Top lf
+        dn[ i, 0] = rt[ i, TL];  // Top dn = Bottom rt
+        rt[ i, 0] = up[ i, TL];  // Top rt = Bottom up
+        ft[ i, 0] = up[TL, mi];  // Top ft = Right up
+        lf[ i, 0] = up[mi,  1];  // Top lf = Top up
+        bk[ i, 0] = up[ 1,  i];  // Top bk = Left up
 
         // Bottom Edge
-        up[i, wrk_end] = rt[       i,        1];  // Bottom up = Top rt
-        dn[i, wrk_end] = lf[       i, tile_len];  // Bottom dn = Bottom lf
-        rt[i, wrk_end] = dn[       i,        1];  // Bottom rt = Top dn
-        ft[i, wrk_end] = dn[tile_len,        i];  // Bottom ft = Right dn
-        lf[i, wrk_end] = dn[       i, tile_len];  // Bottom lf = Bottom dn
-        bk[i, wrk_end] = dn[       1,        i];  // Bottom bk = Left dn
+        up[i, WE] = rt[ i,  1];  // Bottom up = Top rt
+        dn[i, WE] = lf[mi, TL];  // Bottom dn = Bottom lf
+        rt[i, WE] = dn[ i,  1];  // Bottom rt = Top dn
+        ft[i, WE] = dn[TL,  i];  // Bottom ft = Right dn
+        lf[i, WE] = dn[mi, TL];  // Bottom lf = Bottom dn
+        bk[i, WE] = dn[ 1, mi];  // Bottom bk = Left dn
     }
 
     // Corners
     // Not important to "get right", so lets just blend the 2 closest pixels.
-    byte alpha = (byte)128;
+    double alpha = 0.5;
     int s0,t0,t1,s2;
     for (int i = 0; i < 4; i++)
     {
@@ -158,12 +297,12 @@ void PreRender(Surface dst, Surface src)
             break;
         }
         
-        up[s0,t0] = ColorBgra.Blend(up[s0,t1], up[s2,t0], alpha);
-        dn[s0,t0] = ColorBgra.Blend(dn[s0,t1], dn[s2,t0], alpha);
-        rt[s0,t0] = ColorBgra.Blend(rt[s0,t1], rt[s2,t0], alpha);
-        ft[s0,t0] = ColorBgra.Blend(ft[s0,t1], ft[s2,t0], alpha);
-        lf[s0,t0] = ColorBgra.Blend(lf[s0,t1], lf[s2,t0], alpha);
-        bk[s0,t0] = ColorBgra.Blend(bk[s0,t1], bk[s2,t0], alpha);
+        up[s0,t0] = ColorBlendAuto(up[s0,t1], up[s2,t0], alpha);
+        dn[s0,t0] = ColorBlendAuto(dn[s0,t1], dn[s2,t0], alpha);
+        rt[s0,t0] = ColorBlendAuto(rt[s0,t1], rt[s2,t0], alpha);
+        ft[s0,t0] = ColorBlendAuto(ft[s0,t1], ft[s2,t0], alpha);
+        lf[s0,t0] = ColorBlendAuto(lf[s0,t1], lf[s2,t0], alpha);
+        bk[s0,t0] = ColorBlendAuto(bk[s0,t1], bk[s2,t0], alpha);
     }
 
 
@@ -186,7 +325,7 @@ void PreRender(Surface dst, Surface src)
     case 1:  // Sinc
         {
             double t;
-            double sum = 0.0;
+            double sum = 0;
             double eps = 1.0 / 4096.0;
             for (int i = 0; i < user_samples; i++)
             {
@@ -197,7 +336,7 @@ void PreRender(Surface dst, Surface src)
                 }
                 else
                 {
-                    window_1d[i] = 1.0;
+                    window_1d[i] = 1;
                 }
                 sum += window_1d[i];
             }
@@ -283,16 +422,16 @@ void Render(Surface dst, Surface src, Rectangle rect)
     double[] vec = new double[3];  // 3D World Vector
     double[] uv = new double[2];  // 2D Image Vector
 
-    double[] pixel_sum;  // Super-sampling sum of pixels. Order: BGRA
+    SuperSample super;  // Super-sampling sum of pixels.
     ColorBgra pix = ColorBgra.Black;  // Work Pixel
 
     char direction;
     
-    double y = 0.0;
-    double x = 0.0;
+    double y = 0;
+    double x = 0;
 
-    double pitch = 0.0;  // angle made from image y position. ranges from -pi/2 to +pi/2.
-    double yaw = 0.0;  // angle made from image x position. ranges from 0 to 2pi. rotations are OK.
+    double pitch = 0;  // angle made from image y position. ranges from -pi/2 to +pi/2.
+    double yaw = 0;  // angle made from image x position. ranges from 0 to 2pi. rotations are OK.
 
     double sin_pitch;
     double cos_pitch;
@@ -313,7 +452,7 @@ void Render(Surface dst, Surface src, Rectangle rect)
 
         for (int xx = rect.Left; xx < rect.Right; xx++)
         {
-            pixel_sum = new double[4];
+            super = new SuperSample(user_hdr);
 
             for (int sample_y = 0; sample_y < user_samples; sample_y++)
             {
@@ -355,54 +494,52 @@ void Render(Surface dst, Surface src, Rectangle rect)
                             direction = (vec[2] >= 0.0) ? 'Z' : 'z';
                         }
                     }
-					
 
-					switch (direction)
-					{
+
+                    switch (direction)
+                    {
                     case 'X':
-						uv[0] = - vec[1] / vec[0];
-						uv[1] = - vec[2] / vec[0];
+                        uv[0] = - vec[1] / vec[0];
+                        uv[1] = - vec[2] / vec[0];
                         wrk = ref ft;
-						break;
-						
+                        break;
+
                     case 'x':
-						uv[0] = - vec[1] / vec[0];
-						uv[1] =   vec[2] / vec[0];
+                        uv[0] = - vec[1] / vec[0];
+                        uv[1] =   vec[2] / vec[0];
                         wrk = ref bk;
-						break;
-						
+                        break;
+
                     case 'Y':
-						uv[0] =   vec[0] / vec[1];
-						uv[1] = - vec[2] / vec[1];
+                        uv[0] =   vec[0] / vec[1];
+                        uv[1] = - vec[2] / vec[1];
                         wrk = ref rt;
-						break;
-						
+                        break;
+
                     case 'y':
-						uv[0] =   vec[0] / vec[1];
-						uv[1] =   vec[2] / vec[1];
+                        uv[0] =   vec[0] / vec[1];
+                        uv[1] =   vec[2] / vec[1];
                         wrk = ref lf;
-						break;
-						
+                        break;
+
                     case 'Z':
-						uv[0] =   vec[0] / vec[2];
-						uv[1] =   vec[1] / vec[2];
+                        uv[0] =   vec[0] / vec[2];
+                        uv[1] =   vec[1] / vec[2];
                         wrk = ref up;
-						break;
-						
+                        break;
+
                     case 'z':
-						uv[0] = - vec[0] / vec[2];
-						uv[1] =   vec[1] / vec[2];
+                        uv[0] = - vec[0] / vec[2];
+                        uv[1] =   vec[1] / vec[2];
                         wrk = ref dn;
-						break;
+                        break;
 
                     default:
                         return;
-					}
+                    }
 
                     
                     // Remap from World-Vector to Texture-Vector.
-                    // uv[0] = Remap(uv[0], -1.0, 1.0, 0, tile_len-1);
-                    // uv[1] = Remap(uv[1], -1.0, 1.0, 0, tile_len-1);
                     uv[0] = Remap(uv[0], -1.0, 1.0, -0.5, tile_len-0.5);
                     uv[1] = Remap(uv[1], -1.0, 1.0, -0.5, tile_len-0.5);
 
@@ -417,25 +554,18 @@ void Render(Surface dst, Surface src, Rectangle rect)
                         break;
 
                     case 1:  // Bilinear
-                        pix = wrk.GetBilinearSampleClamped((float)uv[0], (float)uv[1]);
+                        pix = BilinearSampleClamped(wrk, uv[0], uv[1]);
                         break;
 
                     default:  // Invalid Interpolation!
                         return;
                     }
 
-                    pixel_sum[0] += pix.B * window[sample_x, sample_y];
-                    pixel_sum[1] += pix.G * window[sample_x, sample_y];
-                    pixel_sum[2] += pix.R * window[sample_x, sample_y];
-                    pixel_sum[3] += pix.A * window[sample_x, sample_y];
+                    super.AddPixel(pix, window[sample_x, sample_y]);
                 }
             }  // end of super-sampling
 
-            pix.B = (byte)Math.Round(pixel_sum[0]);
-            pix.G = (byte)Math.Round(pixel_sum[1]);
-            pix.R = (byte)Math.Round(pixel_sum[2]);
-            pix.A = (byte)Math.Round(pixel_sum[3]);
-
+            pix = super.ToColorBgra();
             dst[xx,yy] = pix;
         }
     }  // end of pixel loops
