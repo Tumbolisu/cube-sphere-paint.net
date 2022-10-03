@@ -2,7 +2,7 @@
 // Submenu: Projection
 // Author: Tumby#5171
 // Title: Project Cubemap to Spheremap
-// Version: 2.0
+// Version: 2.1
 // Desc: Turns a cubemap into an equirectangular spheremap, eliminating edge-distortions, but introducing pole-distortions.
 // Keywords: projection|cube|cubemap|sphere|spheremap|equirectangular|skybox
 // URL: [See RTF File]
@@ -56,9 +56,9 @@ ColorBgra ColorBlendHDR(ColorBgra pix0, ColorBgra pix1, double frac)
 
     pix0.A = (byte)Math.Ceiling(M / 255);
 
-    pix0.R = (byte)(R / pix0.A);
-    pix0.G = (byte)(G / pix0.A);
-    pix0.B = (byte)(B / pix0.A);
+    pix0.R = (byte)Math.Round(R / pix0.A);
+    pix0.G = (byte)Math.Round(G / pix0.A);
+    pix0.B = (byte)Math.Round(B / pix0.A);
 
     return pix0;
 }
@@ -161,9 +161,9 @@ class SuperSample
         {
             double M = (B > G ? (B > R ? B : R) : (G > R ? G : R));
             pix.A = (byte)Math.Ceiling(M / 255);
-            pix.R = (byte)(R / pix.A);
-            pix.G = (byte)(G / pix.A);
-            pix.B = (byte)(B / pix.A);
+            pix.R = (byte)Math.Round(R / pix.A);
+            pix.G = (byte)Math.Round(G / pix.A);
+            pix.B = (byte)Math.Round(B / pix.A);
         }
         else
         {
